@@ -18,6 +18,7 @@ STATE_PATH = "artifacts/state/portfolio.json"
 EQUITY_LOG = "artifacts/equity.jsonl"
 PICKS_DIR = "artifacts/picks"
 TRADE_LOG = "artifacts/trades/trades.jsonl"
+DECISIONS_LOG = "artifacts/decisions.jsonl"
 
 
 def now_ts() -> str:
@@ -54,6 +55,15 @@ def persist_equity_point(value: float, path: str = EQUITY_LOG) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps({"ts": now_ts(), "equity": value}) + "\n")
+
+
+def persist_decisions(records: List[Dict[str, Any]], path: str = DECISIONS_LOG) -> None:
+    if not records:
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    rec = {"ts": now_ts(), "mode": "rebalance", "decisions": records}
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec) + "\n")
 
 
 def latest_picks_file(directory: str = PICKS_DIR) -> str | None:
@@ -226,12 +236,20 @@ def rebalance_to_picks(
     thresh = max(min_trade_cash_pct * eq, 1.0)
 
     # enforce stop-loss before target rebalance
+    decisions_log: List[Dict[str, Any]] = []
     for sym in held_syms:
         pos = port.positions.get(sym)
         px = prices.get(sym, 0.0)
         if pos and pos.qty > 0 and px > 0 and pos.avg_price > 0:
             if px <= pos.avg_price * (1.0 - stop_loss_pct):
                 port.sell(sym, px, pos.qty)
+                decisions_log.append({
+                    "symbol": sym,
+                    "action": "SELL",
+                    "target_weight": 0.0,
+                    "reason": "stop_loss",
+                    "last_price": px,
+                })
 
     # sell names not in picks to target 0
     for sym in held_syms:
@@ -240,6 +258,13 @@ def rebalance_to_picks(
             pos = port.positions.get(sym)
             if pos and pos.qty > 0 and px > 0:
                 port.sell(sym, px, pos.qty)
+                decisions_log.append({
+                    "symbol": sym,
+                    "action": "SELL",
+                    "target_weight": 0.0,
+                    "reason": "not_in_picks",
+                    "last_price": px,
+                })
 
     # adjust picks to target values
     eq = port.value(prices)
@@ -252,17 +277,44 @@ def rebalance_to_picks(
         tgt_val = tw * eq
         delta = tgt_val - cur_val
         if abs(delta) < thresh:
+            # below threshold -> no trade, log hold rationale
+            decisions_log.append({
+                "symbol": sym,
+                "action": "HOLD",
+                "target_weight": tw,
+                "reason": "below_threshold",
+                "last_price": px,
+            })
             continue
         if delta > 0:
             port.buy(sym, px, delta)
+            decisions_log.append({
+                "symbol": sym,
+                "action": "BUY",
+                "target_weight": tw,
+                "reason": "to_target",
+                "last_price": px,
+            })
         else:
             sell_qty = min(pos.qty if pos else 0.0, abs(delta) / px)
             if sell_qty > 0:
                 port.sell(sym, px, sell_qty)
+                decisions_log.append({
+                    "symbol": sym,
+                    "action": "SELL",
+                    "target_weight": tw,
+                    "reason": "trim_to_target",
+                    "last_price": px,
+                })
 
     # persist state and return equity
     final_eq = port.value(prices)
     save_state(port.cash, port.positions)
+    # persist execution decisions
+    try:
+        persist_decisions(decisions_log)
+    except Exception:
+        pass
     return final_eq
 
 

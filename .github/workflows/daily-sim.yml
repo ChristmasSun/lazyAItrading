@@ -60,6 +60,7 @@ jobs:
           git add -f artifacts/state/portfolio.json 2>/dev/null || true
           git add -f artifacts/equity.jsonl 2>/dev/null || true
           git add -f artifacts/trades/trades.jsonl 2>/dev/null || true
+          git add -f artifacts/decisions.jsonl 2>/dev/null || true
           # add most recent picks file if new
           latest_picks=$(ls -1t artifacts/picks/*.csv 2>/dev/null | head -n 1 || true)
           if [ -n "$latest_picks" ]; then
@@ -73,5 +74,5 @@ jobs:
             echo "No changes to commit."
             exit 0
           fi
-          git commit -m "chore(sim): update state/equity/trades [skip ci]"
+          git commit -m "chore(sim): update state/equity/trades/decisions [skip ci]"
           git push
