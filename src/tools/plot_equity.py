@@ -45,6 +45,10 @@ def main() -> None:
 
     xs = [p[0] for p in pts]
     ys = [p[1] for p in pts]
+    # if only one point, duplicate to show a visible flat line
+    if len(xs) == 1:
+        xs = [xs[0], xs[0]]
+        ys = [ys[0], ys[0]]
     plt.figure(figsize=(8, 4))
     plt.plot(xs, ys, label="equity")
     plt.title("Equity Curve")
