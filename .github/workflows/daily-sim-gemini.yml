@@ -33,26 +33,8 @@ jobs:
 
       - name: Render Gemini equity chart
         run: |
-          python - << 'PY'
-import json, os
-from src.tools.plot_equity import read_equity
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-pts = read_equity('artifacts_gemini/equity.jsonl')
-if not pts:
-    raise SystemExit(0)
-xs = [p[0] for p in pts]
-ys = [p[1] for p in pts]
-plt.figure(figsize=(8,4))
-plt.plot(xs, ys, label='gemini')
-plt.title('Equity Curve (Gemini)')
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-os.makedirs('artifacts_gemini', exist_ok=True)
-plt.savefig('artifacts_gemini/equity.png')
-print('wrote artifacts_gemini/equity.png')
-PY
+          python -m pip install matplotlib || true
+          python -m src.tools.plot_equity --equity artifacts_gemini/equity.jsonl --out artifacts_gemini/equity.png || true
 
       - name: Commit artifacts
         run: |
