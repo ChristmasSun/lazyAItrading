@@ -1,0 +1,265 @@
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+from datetime import datetime, UTC
+from zoneinfo import ZoneInfo
+from typing import Dict, Any, List, Tuple
+
+from .tools.universe import load_universe
+from .data.fetch import fetch_ohlcv
+from .backtest.portfolio import Portfolio, Position
+from .agents.risk import RiskAgent
+
+
+STATE_PATH = "artifacts/state/portfolio.json"
+EQUITY_LOG = "artifacts/equity.jsonl"
+PICKS_DIR = "artifacts/picks"
+TRADE_LOG = "artifacts/trades/trades.jsonl"
+
+
+def now_ts() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def load_state(path: str = STATE_PATH) -> Tuple[float, Dict[str, Position]]:
+    if not os.path.exists(path):
+        return 10_000.0, {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        cash = float(data.get("cash", 10_000.0))
+        positions: Dict[str, Position] = {}
+        for sym, pd in data.get("positions", {}).items():
+            positions[sym] = Position(qty=float(pd.get("qty", 0.0)), avg_price=float(pd.get("avg_price", 0.0)))
+        return cash, positions
+    except Exception:
+        return 10_000.0, {}
+
+
+def save_state(cash: float, positions: Dict[str, Position], path: str = STATE_PATH) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    data = {
+        "cash": cash,
+        "positions": {sym: {"qty": pos.qty, "avg_price": pos.avg_price} for sym, pos in positions.items()},
+        "ts": now_ts(),
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+
+
+def persist_equity_point(value: float, path: str = EQUITY_LOG) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"ts": now_ts(), "equity": value}) + "\n")
+
+
+def latest_picks_file(directory: str = PICKS_DIR) -> str | None:
+    if not os.path.isdir(directory):
+        return None
+    files = [os.path.join(directory, x) for x in os.listdir(directory) if x.endswith(".csv")]
+    if not files:
+        return None
+    files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    return files[0]
+
+
+def read_picks(path: str) -> List[Tuple[str, float, float]]:
+    """Return list of (symbol, score, weight). alloc is optional and ignored here for targets."""
+    out: List[Tuple[str, float, float]] = []
+    with open(path, "r", encoding="utf-8") as f:
+        cr = csv.DictReader(f)
+        for row in cr:
+            try:
+                sym = row.get("symbol", "").strip()
+                sc = float(row.get("score", 0.0))
+                w = float(row.get("weight", 0.0))
+                if sym:
+                    out.append((sym, sc, w))
+            except Exception:
+                continue
+    return out
+
+
+def fetch_prices(symbols: List[str], interval: str = "1d", period: str = "1mo") -> Dict[str, float]:
+    prices: Dict[str, float] = {}
+    for s in symbols:
+        series = fetch_ohlcv(s, interval=interval, period=period)
+        px = float(series[-1]["close"]) if series else 0.0
+        prices[s] = px
+    return prices
+
+
+def rebalance_to_picks(
+    picks: List[Tuple[str, float, float]],
+    fee_rate: float,
+    fee_fixed: float,
+    slippage_bps: float,
+    min_trade_cash_pct: float,
+    profile: str,
+    interval: str,
+    period: str,
+) -> float:
+    # load state -> build portfolio -> compute targets
+    cash, positions = load_state()
+    port = Portfolio(cash=cash, fee_rate=fee_rate, fee_fixed=fee_fixed, slippage_bps=slippage_bps, trade_log_path=TRADE_LOG)
+    port.positions = positions
+
+    # build symbol set and prices
+    target_syms = [sym for sym, _, _ in picks]
+    held_syms = list(positions.keys())
+    all_syms = list({*target_syms, *held_syms})
+    prices = fetch_prices(all_syms, interval=interval, period=period)
+
+    # risk cap
+    cap = RiskAgent.PROFILES.get(profile, RiskAgent.PROFILES["balanced"]).max_position_pct
+    # normalize weights and cap
+    total_w = sum(max(0.0, w) for _, _, w in picks)
+    norm = 1.0 / total_w if total_w > 0 else 0.0
+    targets: Dict[str, float] = {}
+    for sym, _, w in picks:
+        ww = max(0.0, w) * norm if norm > 0 else 0.0
+        targets[sym] = min(ww, cap)
+    # scale down if sum > 1
+    sum_w = sum(targets.values())
+    if sum_w > 1.0:
+        scale = 1.0 / sum_w
+        for k in list(targets.keys()):
+            targets[k] *= scale
+
+    eq = port.value(prices)
+    thresh = max(min_trade_cash_pct * eq, 1.0)
+
+    # sell names not in picks to target 0
+    for sym in held_syms:
+        if sym not in targets:
+            px = prices.get(sym, 0.0)
+            pos = port.positions.get(sym)
+            if pos and pos.qty > 0 and px > 0:
+                port.sell(sym, px, pos.qty)
+
+    # adjust picks to target values
+    eq = port.value(prices)
+    for sym, tw in targets.items():
+        px = prices.get(sym, 0.0)
+        if px <= 0:
+            continue
+        pos = port.positions.get(sym)
+        cur_val = (pos.qty * px) if pos else 0.0
+        tgt_val = tw * eq
+        delta = tgt_val - cur_val
+        if abs(delta) < thresh:
+            continue
+        if delta > 0:
+            port.buy(sym, px, delta)
+        else:
+            sell_qty = min(pos.qty if pos else 0.0, abs(delta) / px)
+            if sell_qty > 0:
+                port.sell(sym, px, sell_qty)
+
+    # persist state and return equity
+    final_eq = port.value(prices)
+    save_state(port.cash, port.positions)
+    return final_eq
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--use-picks", action="store_true", help="if set, read latest picks CSV and rebalance to it; else fallback")
+    ap.add_argument("--autopilot", action="store_true", help="run predict -> write picks -> rebalance in one go")
+    ap.add_argument("--picks-file", type=str, default="", help="explicit path to picks CSV; overrides latest selection")
+    ap.add_argument("--universe", type=str, default="sp500")
+    ap.add_argument("--max-symbols", type=int, default=50)
+    ap.add_argument("--interval", type=str, default="1d")
+    ap.add_argument("--period", type=str, default="1mo")
+    ap.add_argument("--cash", type=float, default=10_000.0, help="initial cash if no state exists")
+    ap.add_argument("--profile", type=str, default="balanced")
+    ap.add_argument("--fee-rate", type=float, default=0.0005)
+    ap.add_argument("--fee-fixed", type=float, default=0.0)
+    ap.add_argument("--slippage-bps", type=float, default=2.0)
+    ap.add_argument("--min-trade-cash-pct", type=float, default=0.002)
+    ap.add_argument("--market-hours-only", action="store_true", help="if set, do nothing outside US market hours (Mon-Fri 09:30-16:00 ET)")
+    args = ap.parse_args()
+
+    # bootstrap state if missing
+    if not os.path.exists(STATE_PATH):
+        os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
+        save_state(args.cash, {})
+
+    # market hours guard
+    if args.market_hours_only:
+        try:
+            ny = ZoneInfo("America/New_York")
+            now_ny = datetime.now(ny)
+            # weekday() 0=Mon..6=Sun
+            wk = now_ny.weekday()
+            h = now_ny.hour
+            m = now_ny.minute
+            open_ok = (wk < 5) and ((h > 9 or (h == 9 and m >= 30)) and (h < 16 or (h == 16 and m == 0)))
+            if not open_ok:
+                print(json.dumps({"skipped": True, "reason": "outside_market_hours", "ts": now_ts()}))
+                return
+        except Exception:
+            # if timezone fails just proceed
+            pass
+
+    # optional autopilot: generate picks first
+    if args.autopilot:
+        from .predict_cli import main as predict_main  # local import to avoid overhead when not used
+        # create a fresh picks CSV using universe
+        predict_args = [
+            "--universe", args.universe,
+            "--max-symbols", str(args.max_symbols),
+            "--top-n", str(min(args.max_symbols, 20)),
+            "--weights", "score",
+            "--profile", args.profile,
+            "--cash", "0",
+        ]
+        import sys
+        sys.argv = ["predict_cli"] + predict_args
+        try:
+            predict_main()
+        except SystemExit:
+            pass
+
+    if args.use_picks or args.picks_file:
+        pfile = args.picks_file or latest_picks_file()
+        if pfile and os.path.exists(pfile):
+            picks = read_picks(pfile)
+            final_eq = rebalance_to_picks(
+                picks,
+                fee_rate=args.fee_rate,
+                fee_fixed=args.fee_fixed,
+                slippage_bps=args.slippage_bps,
+                min_trade_cash_pct=args.min_trade_cash_pct,
+                profile=args.profile,
+                interval=args.interval,
+                period=args.period,
+            )
+            persist_equity_point(final_eq)
+            print(json.dumps({"mode": "picks", "equity": final_eq, "picks_file": pfile}))
+            return
+
+    # fallback: no picks -> just score a slice of the universe and simulate a single rebalance via backtest-like step
+    symbols = load_universe(args.universe)[: args.max_symbols]
+    # build a fake equal-weight picks list
+    eq_w = 1.0 / max(1, len(symbols))
+    picks = [(s, 0.0, eq_w) for s in symbols]
+    final_eq = rebalance_to_picks(
+        picks,
+        fee_rate=args.fee_rate,
+        fee_fixed=args.fee_fixed,
+        slippage_bps=args.slippage_bps,
+        min_trade_cash_pct=args.min_trade_cash_pct,
+        profile=args.profile,
+        interval=args.interval,
+        period=args.period,
+    )
+    persist_equity_point(final_eq)
+    print(json.dumps({"mode": "fallback", "equity": final_eq}))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,68 @@
+name: Daily Sim (Autopilot)
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Run every 15 minutes during US market hours in UTC (13:30-20:00 UTC roughly)
+    - cron: '*/15 13-21 * * 1-5'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-sim
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Run autopilot (predict -> rebalance)
+        run: |
+          python -m src.runner_daily --autopilot --use-picks --market-hours-only --profile balanced --fee-rate 0.0005 --slippage-bps 3 --min-trade-cash-pct 0.002
+
+      - name: Commit state/equity/trades and latest picks
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # add files if they exist
+          git add -f artifacts/state/portfolio.json 2>/dev/null || true
+          git add -f artifacts/equity.jsonl 2>/dev/null || true
+          git add -f artifacts/trades/trades.jsonl 2>/dev/null || true
+          # add most recent picks file if new
+          latest_picks=$(ls -1t artifacts/picks/*.csv 2>/dev/null | head -n 1 || true)
+          if [ -n "$latest_picks" ]; then
+            git add -f "$latest_picks"
+          fi
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "chore(sim): update state/equity/trades [skip ci]"
+          git push
