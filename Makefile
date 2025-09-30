@@ -63,10 +63,10 @@ daily:
 	$(PY) -m src.runner_daily
 
 predict:
-	$(PY) -m src.predict_cli --universe sp500 --max-symbols 200 --top-n 20 --weights score --profile $(PROFILE) --cash 10000
+	FETCH_SLEEP_S=0.1 $(PY) -m src.predict_cli --universe sp500 --max-symbols 500 --top-n 25 --weights score --profile $(PROFILE) --cash 10000 --interval 5m --period 5d
 
 daily-autopilot:
-	$(PY) -m src.runner_daily --autopilot --use-picks
+	FETCH_SLEEP_S=0.05 $(PY) -m src.runner_daily --autopilot --use-picks --max-symbols 500 --interval 5m --period 5d
 
 plot-equity:
 	$(PY) -m src.tools.plot_equity

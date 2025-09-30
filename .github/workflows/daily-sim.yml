@@ -42,7 +42,12 @@ jobs:
 
       - name: Run autopilot (predict -> rebalance)
         run: |
-          python -m src.runner_daily --autopilot --use-picks --market-hours-only --profile balanced --fee-rate 0.0005 --slippage-bps 3 --min-trade-cash-pct 0.002
+          FETCH_SLEEP_S=0.05 python -m src.runner_daily --autopilot --use-picks --market-hours-only --max-symbols 500 --profile balanced --fee-rate 0.0005 --slippage-bps 3 --min-trade-cash-pct 0.002
+
+      - name: Render equity chart
+        run: |
+          python -m pip install matplotlib || true
+          python -m src.tools.plot_equity || true
 
       - name: Commit state/equity/trades and latest picks
         env:
@@ -59,6 +64,10 @@ jobs:
           latest_picks=$(ls -1t artifacts/picks/*.csv 2>/dev/null | head -n 1 || true)
           if [ -n "$latest_picks" ]; then
             git add -f "$latest_picks"
+          fi
+          # add chart if present
+          if [ -f artifacts/equity.png ]; then
+            git add -f artifacts/equity.png
           fi
           if git diff --cached --quiet; then
             echo "No changes to commit."

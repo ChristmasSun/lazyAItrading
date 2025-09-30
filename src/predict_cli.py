@@ -12,6 +12,8 @@ from .data.history import save_history_csv, history_path
 from .tools.universe import load_universe
 from .selection.selector import score_universe
 from .agents.risk import RiskAgent
+import os
+import time
 
 
 def ensure_dir(p: str) -> None:
@@ -41,8 +43,8 @@ def main() -> None:
     p.add_argument("--max-symbols", type=int, default=200)
     p.add_argument("--top-n", type=int, default=10)
     p.add_argument("--weights", type=str, choices=["equal", "score"], default="equal")
-    p.add_argument("--interval", type=str, default="1d")
-    p.add_argument("--period", type=str, default="1y")
+    p.add_argument("--interval", type=str, default="5m")
+    p.add_argument("--period", type=str, default="5d")
     p.add_argument("--profile", type=str, default="balanced")
     p.add_argument("--cash", type=float, default=0.0, help="if >0, compute dollar allocations respecting max position cap")
     p.add_argument("--out", type=str, default="")
@@ -54,12 +56,20 @@ def main() -> None:
         if uni_syms:
             symbols = uni_syms[: args.max_symbols]
 
+    # throttle settings
+    sleep_s = float(os.environ.get("FETCH_SLEEP_S", "0.1"))
+    max_fetch = int(os.environ.get("FETCH_MAX", "0"))  # 0 = no cap
+
     # fetch data and save local CSV history
     ohlcv_map: Dict[str, List[Dict[str, Any]]] = {}
-    for s in symbols:
+    for idx, s in enumerate(symbols):
+        if max_fetch and idx >= max_fetch:
+            break
         rows = fetch_ohlcv(s, interval=args.interval, period=args.period)
         ohlcv_map[s] = rows
         save_history_csv(history_path(s, args.interval, args.period), rows)
+        if sleep_s > 0:
+            time.sleep(sleep_s)
 
     ranked = score_universe(symbols, ohlcv_map)
     weighted = compute_weights(ranked, args.top_n, mode=args.weights)
