@@ -46,6 +46,11 @@ def main() -> None:
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         from matplotlib.ticker import FuncFormatter
+        # disable axis offset globally (prevents '+1e4' style and tiny ticks)
+        try:
+            matplotlib.rcParams["axes.formatter.useoffset"] = False
+        except Exception:
+            pass
     except Exception:
         print("matplotlib not available")
         return
