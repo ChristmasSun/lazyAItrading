@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: daily-sim
+  group: sim-artifacts
   cancel-in-progress: false
 
 jobs:
@@ -89,4 +89,7 @@ jobs:
             exit 0
           fi
           git commit -m "chore(sim): update state/equity/trades/decisions [skip ci]"
+          # rebase to avoid push rejects when other workflow updated main
+          git fetch origin
+          git pull --rebase --autostash origin main || true
           git push

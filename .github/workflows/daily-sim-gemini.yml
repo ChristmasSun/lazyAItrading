@@ -8,12 +8,18 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: sim-artifacts
+  cancel-in-progress: false
+
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -46,4 +52,8 @@ jobs:
           git add -f artifacts_gemini/decisions.jsonl 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "No changes"; exit 0; fi
-          git commit -m "chore(gemini): update equity/trades [skip ci]" && git push
+          git commit -m "chore(gemini): update equity/trades/decisions [skip ci]"
+          # rebase to avoid push rejects when other workflow updated main
+          git fetch origin
+          git pull --rebase --autostash origin main || true
+          git push
