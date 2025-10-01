@@ -81,6 +81,10 @@ jobs:
           if [ -f artifacts/equity.png ]; then
             git add -f artifacts/equity.png
           fi
+          # cache-bust README image links by appending a short token
+          SHA=$(git rev-parse --short HEAD || date +%s)
+          perl -0777 -pe "s|(artifacts/equity.png)(\?v=[0-9a-f]+)?|\1?v=${SHA}|g; s|(artifacts_gemini/equity.png)(\?v=[0-9a-f]+)?|\1?v=${SHA}|g" -i README.md || true
+          git add README.md || true
           if git diff --cached --quiet; then
             echo "No changes to commit."
             exit 0

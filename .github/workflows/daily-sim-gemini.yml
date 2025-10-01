@@ -50,6 +50,10 @@ jobs:
           git add -f artifacts_gemini/equity.png 2>/dev/null || true
           git add -f artifacts_gemini/trades.jsonl 2>/dev/null || true
           git add -f artifacts_gemini/decisions.jsonl 2>/dev/null || true
+          # cache-bust README image links by appending a short token
+          SHA=$(git rev-parse --short HEAD || date +%s)
+          perl -0777 -pe "s|(artifacts/equity.png)(\?v=[0-9a-f]+)?|\1?v=${SHA}|g; s|(artifacts_gemini/equity.png)(\?v=[0-9a-f]+)?|\1?v=${SHA}|g" -i README.md || true
+          git add README.md || true
           if git diff --cached --quiet; then
             echo "No changes"; exit 0; fi
           git commit -m "chore(gemini): update equity/trades/decisions [skip ci]"
