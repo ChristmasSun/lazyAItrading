@@ -3,7 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime, UTC
+from datetime import datetime, UTC, date, timedelta
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Tuple
 
 from .data.fetch import fetch_ohlcv
@@ -54,7 +55,7 @@ def persist_equity(value: float, path: str = EQUITY_LOG) -> None:
         f.write(json.dumps({"ts": now_ts(), "equity": value}) + "\n")
 
 
-def persist_decisions(decisions: List[Dict[str, Any]], prices: Dict[str, float], path: str = DECISIONS_LOG) -> None:
+def persist_decisions(decisions: List[Dict[str, Any]], prices: Dict[str, float], path: str = DECISIONS_LOG, meta: Dict[str, Any] | None = None) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     # enrich with last_price and keep only relevant fields
     out: List[Dict[str, Any]] = []
@@ -67,9 +68,78 @@ def persist_decisions(decisions: List[Dict[str, Any]], prices: Dict[str, float],
             "reason": d.get("reason", ""),
             "last_price": float(prices.get(sym, 0.0)),
         })
-    rec = {"ts": now_ts(), "decisions": out}
+    rec: Dict[str, Any] = {"ts": now_ts(), "decisions": out}
+    if meta:
+        rec["meta"] = meta
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
+
+
+# --- Market calendar and cadence helpers (duplicated from runner_daily) ---
+def _easter_sunday(y: int) -> date:
+    a = y % 19
+    b = y // 100
+    c = y % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    return date(y, month, day)
+
+
+def _nth_weekday_of_month(y: int, month: int, weekday: int, n: int) -> date:
+    d = date(y, month, 1)
+    offset = (weekday - d.weekday()) % 7
+    return d + timedelta(days=offset + 7 * (n - 1))
+
+
+def _last_weekday_of_month(y: int, month: int, weekday: int) -> date:
+    d = date(y, month + 1, 1) - timedelta(days=1) if month < 12 else date(y, 12, 31)
+    offset = (d.weekday() - weekday) % 7
+    return d - timedelta(days=offset)
+
+
+def is_us_market_holiday(d: date) -> bool:
+    y = d.year
+    new_year = date(y, 1, 1)
+    if new_year.weekday() == 5:
+        new_year = date(y, 12, 31)
+    elif new_year.weekday() == 6:
+        new_year = date(y, 1, 2)
+    mlk = _nth_weekday_of_month(y, 1, 0, 3)
+    presidents = _nth_weekday_of_month(y, 2, 0, 3)
+    good_friday = _easter_sunday(y) - timedelta(days=2)
+    memorial = _last_weekday_of_month(y, 5, 0)
+    juneteenth = date(y, 6, 19)
+    if juneteenth.weekday() == 5:
+        juneteenth = date(y, 6, 18)
+    elif juneteenth.weekday() == 6:
+        juneteenth = date(y, 6, 20)
+    independence = date(y, 7, 4)
+    if independence.weekday() == 5:
+        independence = date(y, 7, 3)
+    elif independence.weekday() == 6:
+        independence = date(y, 7, 5)
+    labor = _nth_weekday_of_month(y, 9, 0, 1)
+    thanksgiving = _nth_weekday_of_month(y, 11, 3, 4)
+    christmas = date(y, 12, 25)
+    if christmas.weekday() == 5:
+        christmas = date(y, 12, 24)
+    elif christmas.weekday() == 6:
+        christmas = date(y, 12, 26)
+    holidays = {new_year, mlk, presidents, good_friday, memorial, juneteenth, independence, labor, thanksgiving, christmas}
+    return d in holidays
+
+
+def should_act_now(now_ny: datetime) -> bool:
+    return now_ny.minute % 15 == 0
 
 
 def summarize(symbols: List[str], interval: str, period: str) -> Tuple[Dict[str, List[Dict[str, Any]]], List[str]]:
@@ -153,6 +223,20 @@ def main() -> None:
     ap.add_argument("--temperature", type=float, default=0.4)
     args = ap.parse_args()
 
+    # market-hours guard (NY 09:30-16:00, weekdays, 15m gating, holidays)
+    try:
+        ny = ZoneInfo("America/New_York")
+        now_ny = datetime.now(ny)
+        wk = now_ny.weekday()
+        h = now_ny.hour
+        m = now_ny.minute
+        open_ok = (wk < 5) and ((h > 9 or (h == 9 and m >= 30)) and (h < 16 or (h == 16 and m == 0)))
+        if not open_ok or is_us_market_holiday(now_ny.date()) or not should_act_now(now_ny):
+            print(json.dumps({"skipped": True, "reason": "outside_market_hours", "ts": now_ts()}))
+            return
+    except Exception:
+        pass
+
     syms = load_universe(args.universe)[: args.max_symbols]
     ohlcv_map, table_rows = summarize(syms, args.interval, args.period)
 
@@ -172,11 +256,27 @@ def main() -> None:
     prompt = build_prompt(pf, table_rows, rules, allowed_symbols=syms)
     out = call_gemini_json(prompt, model_name=args.model, temperature=args.temperature)
     decisions = out.get("decisions", []) if isinstance(out, dict) else []
+    err = out.get("error") if isinstance(out, dict) else None
 
     port = Portfolio(cash=cash, fee_rate=args.fee_rate, fee_fixed=args.fee_fixed, slippage_bps=args.slippage_bps, trade_log_path=TRADE_LOG)
     port.positions = positions
-    # log decisions w/ reasons for inspection
-    persist_decisions(decisions, prices)
+    # if no decisions from LLM, build a simple fallback: top by 5-bar momentum (r5d proxy) equal-weighted
+    if not decisions:
+        parsed: List[Tuple[str, float]] = []
+        for row in table_rows:
+            try:
+                sym, last_px, r1d, r5d, rsi = row.split(",")
+                parsed.append((sym, float(r5d)))
+            except Exception:
+                continue
+        parsed.sort(key=lambda x: x[1], reverse=True)
+        picks = [sym for sym, _ in parsed[: max(1, args.max_positions)]]
+        wt = 1.0 / len(picks) if picks else 0.0
+        decisions = [{"symbol": s, "action": "BUY", "target_weight": wt, "reason": "fallback_momentum"} for s in picks]
+        persist_decisions(decisions, prices, meta={"fallback": True, "error": err or "empty_decisions"})
+    else:
+        # log decisions w/ reasons for inspection
+        persist_decisions(decisions, prices)
     apply_decisions(port, prices, decisions, args.max_positions, args.min_trade_cash_pct)
     eq = port.value(prices)
     save_state(port.cash, port.positions)

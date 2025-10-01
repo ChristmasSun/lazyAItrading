@@ -45,6 +45,7 @@ def main() -> None:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+        from matplotlib.ticker import FuncFormatter
     except Exception:
         print("matplotlib not available")
         return
@@ -56,11 +57,28 @@ def main() -> None:
         xs = [xs[0], xs[0] + timedelta(minutes=1)]
         ys = [ys[0], ys[0]]
     plt.figure(figsize=(8, 4))
-    plt.plot(xs, ys, label="equity", marker="o", markersize=2)
+    plt.plot(xs, ys, label="equity", marker="o", markersize=3, linewidth=1.6)
     plt.title("Equity Curve")
     plt.xlabel("Date")
+    ax = plt.gca()
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"${y:,.0f}"))
+    ax.ticklabel_format(useOffset=False, style="plain", axis="y")
+    # hide scientific notation offset just in case
+    try:
+        ax.get_yaxis().get_offset_text().set_visible(False)
+    except Exception:
+        pass
+    # set tight y-limits to avoid confusing small tick labels like -2, 0, 2 with a large offset
+    if ys:
+        y_min = min(ys)
+        y_max = max(ys)
+        if y_min == y_max:
+            pad = max(1.0, abs(y_min) * 0.01)
+        else:
+            pad = max(1.0, (y_max - y_min) * 0.05)
+        ax.set_ylim(y_min - pad, y_max + pad)
     plt.ylabel("Equity ($)")
-    plt.grid(True, alpha=0.3)
+    plt.grid(True, alpha=0.35)
     plt.legend()
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     plt.tight_layout()
