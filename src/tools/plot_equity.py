@@ -62,7 +62,6 @@ def main() -> None:
     plt.xlabel("Date")
     ax = plt.gca()
     ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"${y:,.0f}"))
-    ax.ticklabel_format(useOffset=False, style="plain", axis="y")
     # hide scientific notation offset just in case
     try:
         ax.get_yaxis().get_offset_text().set_visible(False)
