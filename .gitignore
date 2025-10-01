@@ -30,6 +30,6 @@ htmlcov/
 
 # Data/artifacts
 logs/
-artifacts/
+artifacts/picks/
 notebooks/.ipynb_checkpoints/
 *.md

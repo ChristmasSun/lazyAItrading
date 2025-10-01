@@ -48,20 +48,17 @@ jobs:
         run: |
           FETCH_SLEEP_S=0.05 python -m src.runner_daily --autopilot --use-picks --market-hours-only --max-symbols 500 --profile balanced --fee-rate 0.0005 --slippage-bps 3 --min-trade-cash-pct 0.002
 
+      - name: Bootstrap equity if missing
+        run: |
+          if [ ! -f artifacts/equity.jsonl ]; then
+            date_u=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            echo "{\"ts\":\"$date_u\",\"equity\":10000}" > artifacts/equity.jsonl
+          fi
+
       - name: Render equity chart
         run: |
           python -m pip install matplotlib || true
           python -m src.tools.plot_equity || true
-
-      - name: Bootstrap equity if missing and re-render chart
-        run: |
-          if [ ! -f artifacts/equity.png ]; then
-            if [ ! -f artifacts/equity.jsonl ]; then
-              date_u=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-              echo "{\"ts\":\"$date_u\",\"equity\":10000}" > artifacts/equity.jsonl
-            fi
-            python -m src.tools.plot_equity || true
-          fi
 
       - name: Commit state/equity/trades and latest picks
         env:
