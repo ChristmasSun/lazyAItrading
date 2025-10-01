@@ -10,3 +10,4 @@ Data sources:
 - artifacts_gemini/equity.jsonl (gemini)
 
 updates every 15m in market hours (if not just ignores)
+inspired from https://github.com/LuckyOne7777/ChatGPT-Micro-Cap-Experiment
