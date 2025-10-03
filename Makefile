@@ -29,6 +29,7 @@ help:
 	@echo "make daily-autopilot# generate picks then rebalance once and log equity/trades"
 	@echo "make plot-equity    # render artifacts/equity.jsonl to artifacts/equity.png (matplotlib optional)"
 	@echo "make print-python   # show which python"
+	@echo "make ping-gemini    # send a test prompt to Gemini (reads GEMINI_API_KEY from env or .env)"
 	@echo "make clean          # remove caches/artifacts"
 
 venv:
@@ -70,6 +71,9 @@ daily-autopilot:
 
 plot-equity:
 	$(PY) -m src.tools.plot_equity
+
+ping-gemini:
+	$(PY) -m src.tools.ping_gemini --prompt "Say 'pong' and nothing else."
 
 print-python:
 	@echo "Python: $$($(PY) --version)"

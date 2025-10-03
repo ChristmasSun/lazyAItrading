@@ -3,8 +3,8 @@ name: Daily Sim (Autopilot)
 on:
   workflow_dispatch: {}
   schedule:
-    # Run every 15 minutes during US market hours in UTC (13:30-20:00 UTC roughly)
-    - cron: '*/15 13-21 * * 1-5'
+    # Run every 30 minutes during US market hours in UTC (13:30-20:00 UTC roughly)
+    - cron: '*/30 13-21 * * 1-5'
 
 permissions:
   contents: write

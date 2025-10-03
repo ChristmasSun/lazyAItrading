@@ -33,3 +33,4 @@ logs/
 artifacts/picks/
 notebooks/.ipynb_checkpoints/
 *.md
+data/cache/
