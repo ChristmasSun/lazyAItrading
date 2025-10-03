@@ -203,6 +203,7 @@ def rebalance_to_picks(
     profile: str,
     interval: str,
     period: str,
+    sell_signals: List[str] | None = None,
 ) -> float:
     # load state -> build portfolio -> compute targets
     cash, positions = load_state()
@@ -214,6 +215,23 @@ def rebalance_to_picks(
     held_syms = list(positions.keys())
     all_syms = list({*target_syms, *held_syms})
     prices = fetch_prices(all_syms, interval=interval, period=period)
+    
+    # SELL SIGNAL PATH: immediate liquidation of strong sells
+    decisions_log: List[Dict[str, Any]] = []
+    if sell_signals:
+        for sym in sell_signals:
+            if sym in port.positions:
+                pos = port.positions.get(sym)
+                px = prices.get(sym, 0.0)
+                if pos and pos.qty > 0 and px > 0:
+                    port.sell(sym, px, pos.qty)
+                    decisions_log.append({
+                        "symbol": sym,
+                        "action": "SELL",
+                        "target_weight": 0.0,
+                        "reason": "strong_sell_signal",
+                        "last_price": px,
+                    })
 
     # risk cap and stop-loss
     cap = RiskAgent.PROFILES.get(profile, RiskAgent.PROFILES["balanced"]).max_position_pct
@@ -236,7 +254,6 @@ def rebalance_to_picks(
     thresh = max(min_trade_cash_pct * eq, 1.0)
 
     # enforce stop-loss before target rebalance
-    decisions_log: List[Dict[str, Any]] = []
     for sym in held_syms:
         pos = port.positions.get(sym)
         px = prices.get(sym, 0.0)
@@ -387,6 +404,21 @@ def main() -> None:
         pfile = args.picks_file or latest_picks_file()
         if pfile and os.path.exists(pfile):
             picks = read_picks(pfile)
+            
+            # detect strong SELL signals on current holdings
+            cash, positions = load_state()
+            held_syms = list(positions.keys())
+            sell_signals: List[str] = []
+            if held_syms and args.autopilot:
+                from .data.fetch import fetch_ohlcv
+                from .selection.selector import detect_sell_signals
+                ohlcv_map = {}
+                for s in held_syms:
+                    series = fetch_ohlcv(s, interval=args.interval, period=args.period)
+                    if series:
+                        ohlcv_map[s] = series
+                sell_signals = detect_sell_signals(held_syms, ohlcv_map, confidence_threshold=0.65)
+            
             final_eq = rebalance_to_picks(
                 picks,
                 fee_rate=args.fee_rate,
@@ -396,9 +428,10 @@ def main() -> None:
                 profile=args.profile,
                 interval=args.interval,
                 period=args.period,
+                sell_signals=sell_signals if sell_signals else None,
             )
             persist_equity_point(final_eq)
-            print(json.dumps({"mode": "picks", "equity": final_eq, "picks_file": pfile}))
+            print(json.dumps({"mode": "picks", "equity": final_eq, "picks_file": pfile, "sell_signals": sell_signals}))
             return
 
     # fallback: no picks -> just score a slice of the universe and simulate a single rebalance via backtest-like step
@@ -415,6 +448,7 @@ def main() -> None:
         profile=args.profile,
         interval=args.interval,
         period=args.period,
+        sell_signals=None,
     )
     persist_equity_point(final_eq)
     print(json.dumps({"mode": "fallback", "equity": final_eq}))

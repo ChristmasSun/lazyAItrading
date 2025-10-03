@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Dict, Any, List, Tuple
 
 from ..agents.technical import TechnicalAnalysisAgent
+from ..core.types import SignalType
 
 
 def score_universe(symbols: List[str], ohlcv_map: Dict[str, List[Dict[str, Any]]]) -> List[Tuple[str, float]]:
@@ -19,3 +20,16 @@ def score_universe(symbols: List[str], ohlcv_map: Dict[str, List[Dict[str, Any]]
         scores.append((s, float(val)))
     scores.sort(key=lambda x: x[1], reverse=True)
     return scores
+
+
+def detect_sell_signals(symbols: List[str], ohlcv_map: Dict[str, List[Dict[str, Any]]], confidence_threshold: float = 0.6) -> List[str]:
+    """return symbols with strong SELL signals for immediate liquidation"""
+    agent = TechnicalAnalysisAgent()
+    sell_list: List[str] = []
+    for s in symbols:
+        series = ohlcv_map.get(s, [])
+        ctx = {"symbol": s, "ohlcv": series[-60:], "last_price": (series[-1]["close"] if series else 0.0)}
+        sig = agent.signal(ctx)
+        if sig.signal == "SELL" and sig.confidence >= confidence_threshold:
+            sell_list.append(s)
+    return sell_list

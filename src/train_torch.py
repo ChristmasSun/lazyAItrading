@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import List, Tuple
 import importlib
@@ -87,4 +88,18 @@ def train_torch(symbols: List[str], out_no_ext: str, epochs: int = 10, batch_siz
     # ensure at least one checkpoint exists
     if best_val == float("inf"):
         model.save(out_no_ext)
+    
+    # run post-training evaluation
+    try:
+        from .tools.eval_model import eval_model
+        print("\nrunning post-train eval...")
+        eval_result = eval_model(symbols=symbols[:min(10, len(symbols))], profile="balanced", interval="1d", period="1y")
+        # save metrics alongside checkpoint
+        metrics_path = out_no_ext + ".metrics.json"
+        with open(metrics_path, "w", encoding="utf-8") as mf:
+            json.dump(eval_result, mf, indent=2)
+        print(f"model sharpe: {eval_result['model']['sharpe_ratio']:.2f}, alpha: {eval_result['alpha']*100:.2f}%")
+    except Exception as e:
+        print(f"eval skipped: {e}")
+    
     return out_no_ext

@@ -1,0 +1,25 @@
+{
+  "model": {
+    "total_return": 0.040271819888574645,
+    "sharpe_ratio": 2.9075145974075474,
+    "max_drawdown": 0.006417762363076918,
+    "win_rate": 0.584,
+    "final_equity": 10402.718198885746,
+    "num_periods": 126
+  },
+  "baseline": {
+    "total_return": 0.4037002418967859,
+    "sharpe_ratio": 2.748704023553422,
+    "max_drawdown": 0.06011579883397947,
+    "win_rate": 0.584,
+    "final_equity": 14037.002418967859,
+    "num_periods": 126
+  },
+  "alpha": -0.36342842200821124,
+  "symbols": [
+    "AAPL",
+    "MSFT"
+  ],
+  "profile": "balanced",
+  "num_symbols": 2
+}
