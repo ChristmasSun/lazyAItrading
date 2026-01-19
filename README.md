@@ -2,8 +2,8 @@
 
 Auto-updated equity curves (simulated)
 
-- custom agent: ![Equity Curve](artifacts/equity.png?v=a089971)
-- gemini: ![Equity Curve (Gemini)](artifacts_gemini/equity.png?v=a089971)
+- custom agent: ![Equity Curve](artifacts/equity.png?v=14bf375)
+- gemini: ![Equity Curve (Gemini)](artifacts_gemini/equity.png?v=14bf375)
 
 Data sources:
 - artifacts/equity.jsonl (custom agent)
